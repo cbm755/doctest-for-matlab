@@ -11,19 +11,32 @@ function results = doctest_run(docstring)
 % results.source:   the source code that was run
 % results.want:     the desired output
 % results.got:      the output that was recieved
-% results.pass:     whether .want and .got match each other according to
+% results.passed:   whether .want and .got match each other according to
 %       doctest_compare.
 %
 
-% start with Examples: ..., end before "\nSee also ..." (if any)
-[~,~,~,~,matches] = regexp(docstring, 'Examples:\s*\n(.*)\n\s*See also ');
-if length(matches) > 0
-  docstring = matches{1}{1};
-end
-
 % loosely based on Python 2.6 doctest.py, line 510
-example_re = '(?m)(?-s)(?:^ *>> )(.*(\n *\.\. .*)*)\n((?:(?:^ *$\n)?(?!\s*>>).*\S.*\n)*)';
+example_re = [
+    '(?m)(?-s)'                          ... % options
+    '(?:^ *>> )'                         ... % ">> "
+    '(.*(?:\n *\.\. .*)*)\n'             ... % rest of line + ".. " lines
+    '((?:(?:^ *$\n)?(?!\s*>>).*\S.*\n)*)'];  % the output
 [~,~,~,~,examples] = regexp(docstring, example_re);
+
+
+% Some tests are marked to skip
+skip = false(size(examples));
+for i = 1:length(examples)
+  % each block should be split into input/output by the regex
+  assert (length(examples{i}) == 2);
+
+  % this test marked for skip
+  if (regexp(examples{i}{1}, '[#|%] doctest: \+SKIP'))
+    skip(i) = true;
+  end
+end
+examples = examples(~skip);
+
 
 for i = 1:length(examples)
   % split into lines
@@ -49,14 +62,14 @@ for i = 1:length(examples)
   results(i).source = examples{i}{1};
   results(i).want = strtrim(want_unspaced);
   results(i).got = strtrim(got_unspaced);
-  pass = doctest_compare(want_unspaced, got_unspaced);
+  passed = doctest_compare(want_unspaced, got_unspaced);
   % a list of acceptably-missing prefixes (allow customizing?)
   prefix = {'', 'ans = '};
   for ii = 1:length(prefix)
-    pass = doctest_compare([prefix{ii} want_unspaced], got_unspaced);
-    if pass break end
+    passed = doctest_compare([prefix{ii} want_unspaced], got_unspaced);
+    if passed, break, end
   end
-  results(i).pass = pass;
+  results(i).passed = passed;
 end
 
 end
@@ -97,27 +110,19 @@ end
 
 function formatted = DOCTEST__format_exception(ex)
 
-  try
-    OCTAVE_VERSION;
-    running_octave = 1;
-  catch
-    running_octave = 0;
+  if is_octave()
+    formatted = ['??? ' ex.message];
+    return
   end
 
-  if running_octave
-      formatted = ['??? ' ex.message];
-      return
-  end
-
-if strcmp(ex.stack(1).name, 'DOCTEST__evalc')
+  if strcmp(ex.stack(1).name, 'DOCTEST__evalc')
     % we don't want the report, we just want the message
     % otherwise it'll talk about evalc, which is not what the user got on
     % the command line.
     formatted = ['??? ' ex.message];
-else
+  else
     formatted = ['??? ' ex.getReport('basic')];
-end
-
+  end
 end
 
 
@@ -125,14 +130,20 @@ function s = doctest_fake_evalc(cmd)
 %DOCTEST_FAKE_EVALC
 %   A helper routine to (poorly) emulate evalc using diary and a temp
 %   file.  Octave has no evalc command (as of 2015-02).
-%   FIXME: this spams stdout as well as capturing.
+
+  % redirect stdout to /dev/null for the duration of this function
+  % fflush(stdout);
+  % PAGER('cat > /dev/null', 'local');
+  % PAGER_FLAGS('-', 'local');
+  % page_screen_output(1, 'local');
+  % page_output_immediately(1, 'local');
 
   tf = tmpnam();
-  diary(tf)
+  diary(tf);
   % could have escaped newlines?  No, eval doesn't like them.
   %cmd = strrep(cmd, '\n', sprintf('\n'))
   evalin('caller', cmd);
-  diary off
+  diary off;
   s = fileread(tf);
   unlink(tf);
 end
